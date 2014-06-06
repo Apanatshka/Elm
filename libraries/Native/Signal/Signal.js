@@ -9,10 +9,10 @@ Elm.Native.Signal.make = function(elm) {
   var Utils = Elm.Native.Utils.make(elm);
   var foldr1 = Elm.List.make(elm).foldr1;
 
-  function send(node, timestep, changed) {
+  function send(node, timestep, isUpdate, isDuplicate) {
     var kids = node.kids;
     for (var i = kids.length; i--; ) {
-      kids[i].recv(timestep, changed, node.id);
+      kids[i].recv(timestep, isUpdate, isDuplicate, node.id);
     }
   }
 
@@ -21,31 +21,40 @@ Elm.Native.Signal.make = function(elm) {
     this.value = base;
     this.kids = [];
     this.defaultNumberOfKids = 0;
-    this.recv = function(timestep, eid, v) {
-      var changed = eid === this.id;
-      if (changed) { this.value = v; }
-      send(this, timestep, changed);
-      return changed;
+    this.recv = function(timestep, updateId, v) {
+      var isUpdate = updateId === this.id;
+      var isDuplicate = !isUpdate || this.value === v;
+      if (isUpdate) { this.value = v; }
+      send(this, timestep, isUpdate, isDuplicate);
+      return isUpdate;
     };
     elm.inputs.push(this);
   }
 
-  function LiftN(update, args) {
+  function LiftN(pure, update, args) {
     this.id = Utils.guid();
     this.value = update();
     this.kids = [];
 
     var n = args.length;
     var count = 0;
-    var isChanged = false;
+    var anyUpdates = false;
+    var allDuplicates = true;
 
-    this.recv = function(timestep, changed, parentID) {
+    this.recv = function(timestep, isUpdate, isDuplicate, parentID) {
       ++count;
-      if (changed) { isChanged = true; }
-      if (count == n) {
-        if (isChanged) { this.value = update(); }
-        send(this, timestep, isChanged);
-        isChanged = false;
+      if (isUpdate) { anyUpdates = true; }
+      if (!isDuplicate) { allDuplicates = false; }
+      if (count === n) {
+        var resultIsDuplicate = pure && allDuplicates;
+        if (!resultIsDuplicate) {
+          var newValue = update();
+          resultIsDuplicate = this.value === newValue;
+          this.value = newValue;
+        }
+        send(this, timestep, anyUpdates, resultIsDuplicate);
+        anyUpdates = false;
+        allDuplicates = true;
         count = 0;
       }
     };
@@ -54,35 +63,44 @@ Elm.Native.Signal.make = function(elm) {
 
   function lift(func, a) {
     function update() { return func(a.value); }
-    return new LiftN(update, [a]);
+    return new LiftN(true, update, [a]);
   }
   function lift2(func, a, b) {
     function update() { return A2( func, a.value, b.value ); }
-    return new LiftN(update, [a,b]);
+    return new LiftN(true, update, [a,b]);
   }
   function lift3(func, a, b, c) {
     function update() { return A3( func, a.value, b.value, c.value ); }
-    return new LiftN(update, [a,b,c]);
+    return new LiftN(true, update, [a,b,c]);
   }
   function lift4(func, a, b, c, d) {
     function update() { return A4( func, a.value, b.value, c.value, d.value ); }
-    return new LiftN(update, [a,b,c,d]);
+    return new LiftN(true, update, [a,b,c,d]);
   }
   function lift5(func, a, b, c, d, e) {
     function update() { return A5( func, a.value, b.value, c.value, d.value, e.value ); }
-    return new LiftN(update, [a,b,c,d,e]);
+    return new LiftN(true, update, [a,b,c,d,e]);
   }
   function lift6(func, a, b, c, d, e, f) {
     function update() { return A6( func, a.value, b.value, c.value, d.value, e.value, f.value ); }
-    return new LiftN(update, [a,b,c,d,e,f]);
+    return new LiftN(true, update, [a,b,c,d,e,f]);
   }
   function lift7(func, a, b, c, d, e, f, g) {
     function update() { return A7( func, a.value, b.value, c.value, d.value, e.value, f.value, g.value ); }
-    return new LiftN(update, [a,b,c,d,e,f,g]);
+    return new LiftN(true, update, [a,b,c,d,e,f,g]);
   }
   function lift8(func, a, b, c, d, e, f, g, h) {
     function update() { return A8( func, a.value, b.value, c.value, d.value, e.value, f.value, g.value, h.value ); }
-    return new LiftN(update, [a,b,c,d,e,f,g,h]);
+    return new LiftN(true, update, [a,b,c,d,e,f,g,h]);
+  }
+  
+  function liftEffect(func, a) {
+    function update() { return func(a.value); }
+    return new LiftN(false, update, [a]);
+  }
+  function liftEffect2(func, a, b) {
+    function update() { return A2( func, a.value, b.value ); }
+    return new LiftN(false, update, [a,b]);
   }
 
   function Foldp(step, state, input) {
@@ -90,11 +108,13 @@ Elm.Native.Signal.make = function(elm) {
     this.value = state;
     this.kids = [];
 
-    this.recv = function(timestep, changed, parentID) {
-      if (changed) {
-          this.value = A2( step, input.value, this.value );
+    this.recv = function(timestep, isUpdate, _, parentID) {
+      if (isUpdate) {
+        var newValue = A2(step, input.value, this.value);
+        var referenceEquality = this.value === newValue;
+        this.value = newValue;
       }
-      send(this, timestep, changed);
+      send(this, timestep, isUpdate, !isUpdate || referenceEquality);
     };
     input.kids.push(this);
   }
@@ -103,14 +123,17 @@ Elm.Native.Signal.make = function(elm) {
       return new Foldp(step, state, input);
   }
 
-  function DropIf(pred,base,input) {
+  function DropIf(pred, base, input) {
     this.id = Utils.guid();
     this.value = pred(input.value) ? base : input.value;
     this.kids = [];
-    this.recv = function(timestep, changed, parentID) {
-      var chng = changed && !pred(input.value);
-      if (chng) { this.value = input.value; }
-      send(this, timestep, chng);
+    this.recv = function(timestep, isUpdate, isDuplicate, parentID) {
+      var isChange = isUpdate && !pred(input.value);
+      if (isChange) {
+        var referenceEquality = this.value === input.value;
+        this.value = input.value;
+      }
+      send(this, timestep, isChange, !isChange || referenceEquality);
     };
     input.kids.push(this);
   }
@@ -119,84 +142,111 @@ Elm.Native.Signal.make = function(elm) {
     this.id = Utils.guid();
     this.value = input.value;
     this.kids = [];
-    this.recv = function(timestep, changed, parentID) {
-      var chng = changed && !Utils.eq(this.value,input.value);
-      if (chng) { this.value = input.value; }
-      send(this, timestep, chng);
+    this.recv = function(timestep, isUpdate, isDuplicate, parentID) {
+      var isChange = isUpdate && !Utils.eq(this.value,input.value);
+      if (isChange) {
+        this.value = input.value;
+      }
+      send(this, timestep, isChange, !isChange);
     };
     input.kids.push(this);
   }
 
-  function timestamp(a) {
-    function update() { return Utils.Tuple2(Date.now(), a.value); }
-    return new LiftN(update, [a]);
+  function timestamp(signal) {
+    function update(value) { return Utils.Tuple2(Date.now(), value); }
+    return liftEffect(update, signal);
   }
 
-  function SampleOn(s1,s2) {
+  function SampleOn(trigger, signal) {
     this.id = Utils.guid();
     this.value = s2.value;
     this.kids = [];
 
     var count = 0;
-    var isChanged = false;
+    var triggerIsUpdated = false;
+    var signalIsDuplicate = false;
 
-    this.recv = function(timestep, changed, parentID) {
-      if (parentID === s1.id) isChanged = changed;
+    this.recv = function(timestep, isUpdate, isDuplicate, parentID) {
+      if (parentID === trigger.id) {
+        triggerIsUpdated = isUpdate;
+      }
+      if (parentID === signal.id) {
+        signalIsDuplicate = isDuplicate;
+      }
       ++count;
-      if (count == 2) {
-        if (isChanged) { this.value = s2.value; }
-        send(this, timestep, isChanged);
+      if (count === 2) {
+        if (triggerIsUpdated) {
+          this.value = signal.value;
+        }
+        send(this, timestep, triggerIsUpdated, signalIsDuplicate);
         count = 0;
-        isChanged = false;
+        triggerIsUpdated = false;
+        signalIsDuplicate = false;
       }
     };
     s1.kids.push(this);
     s2.kids.push(this);
   }
 
-  function sampleOn(s1,s2) { return new SampleOn(s1,s2); }
+  function sampleOn(trigger, signal) {
+    return new SampleOn(trigger, signal);
+  }
 
-  function delay(t,s) {
-      var delayed = new Input(s.value);
-      var firstEvent = true;
-      function update(v) {
+  function delay(delayLength, signal) {
+      var delayed = new Input(signal.value);
+      var firstEvent = true;    
+      function update(timestep, isUpdate, isDuplicate, parentID) {
         if (firstEvent) { firstEvent = false; return; }
-        setTimeout(function() { elm.notify(delayed.id, v); }, t);
+        if (isUpdate) {
+          var value = signal.value;
+          setTimeout(function() {
+              elm.notify(delayed.id, value);
+          }, delayLength);
+        }
       }
       function first(a,b) { return a; }
       return new SampleOn(delayed, lift2(F2(first), delayed, lift(update,s)));
   }
 
-  function Merge(s1,s2) {
+  function Merge(xs, ys) {
       this.id = Utils.guid();
-      this.value = s1.value;
+      this.value = xs.value;
       this.kids = [];
 
       var next = null;
       var count = 0;
-      var isChanged = false;
-
-      this.recv = function(timestep, changed, parentID) {
+    
+      this.recv = function(timestep, isUpdate, isDuplicate, parentID) {
         ++count;
-        if (changed) {
-            isChanged = true;
-            if (parentID == s2.id && next === null) { next = s2.value; }
-            if (parentID == s1.id) { next = s1.value; }
+        if (isUpdate) {
+          if (parentID === xs.id) {
+            next = xs;
+          } else if (parentID === ys.id && next === null) {
+            next = ys;
+          }
         }
 
-        if (count == 2) {
-            if (isChanged) { this.value = next; next = null; }
-            send(this, timestep, isChanged);
-            isChanged = false;
-            count = 0;
+        if (count === 2) {
+          var anyUpdates = next !== null;
+          if (anyUpdates) {
+            var referenceEquality = this.value === next.value;
+            this.value = next.value;
+          }
+          send(this, timestep, anyUpdates, referenceEquality);
+          count = 0;
+          next = null;
         }
       };
       s1.kids.push(this);
       s2.kids.push(this);
   }
 
-  function merge(s1,s2) { return new Merge(s1,s2); }
-  function merges(ss) { return A2(foldr1, F2(merge), ss); }
+  function merge(xs, ys) {
+      return new Merge(s1,s2);
+  }
+  function merges(signals) {
+      return A2(foldr1, F2(merge), signals);
+  }
 
   return elm.Native.Signal.values = {
     constant : function(v) { return new Input(v); },
@@ -208,6 +258,8 @@ Elm.Native.Signal.make = function(elm) {
     lift6 : F7(lift6),
     lift7 : F8(lift7),
     lift8 : F9(lift8),
+    liftEffect : liftEffect,
+    liftEffect2 : liftEffect2,
     foldp : F3(foldp),
     delay : F2(delay),
     merge : F2(merge),

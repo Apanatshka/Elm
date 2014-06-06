@@ -5,6 +5,7 @@ Elm.Native.Ports.make = function(elm) {
     if (elm.Native.Ports.values) return elm.Native.Ports.values;
 
     var Signal = Elm.Signal.make(elm);
+    var NS = Elm.Native.Signal.make(elm);
 
     function incomingSignal(converter) {
         converter.isSignal = true;
@@ -20,7 +21,7 @@ Elm.Native.Ports.make = function(elm) {
             function unsubscribe(handler) {
                 subscribers.pop(subscribers.indexOf(handler));
             }
-            A2( Signal.lift, function(value) {
+            NS.liftEffect(function(value) {
                 var val = converter(value);
                 var len = subscribers.length;
                 for (var i = 0; i < len; ++i) {

@@ -105,7 +105,7 @@ function init(display, container, module, ports, moduleToReplace) {
 
       // rerender scene if graphics are enabled.
       if (typeof graphicsNode !== 'undefined') {
-          graphicsNode.recv(0, true, 0);
+          graphicsNode.recv(0, true, false, 0);
       }
   }
 
