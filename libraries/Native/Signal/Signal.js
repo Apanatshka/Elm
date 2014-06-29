@@ -30,6 +30,8 @@ Elm.Native.Signal.make = function(elm) {
     elm.inputs.push(this);
   }
   
+  var NoUpdate$ = { ctor: "NoUpdate'" };
+  
   // primitiveNode : (a_n -> b) -> ((Event a)_n -> b -> Event b) -> (Signal a)_n -> Signal b
   function PrimitiveNode(init, step, inputs) {
     this.id = Utils.guid();
@@ -52,7 +54,7 @@ Elm.Native.Signal.make = function(elm) {
       if(count === n) {
         result = AN(step, msgs.concat(this.value));
         
-        this.value = result._0;
+        this.value = result === NoUpdate$ ? this.value : result._0;
         changed = result.ctor === "Update";
         send(this, timestep, changed);
         
@@ -97,7 +99,7 @@ Elm.Native.Signal.make = function(elm) {
       if(count === n) {
         result = AN(step, msgs.concat(this.state, this.value));
         
-        this.value = result._0._0; // unpack the Update value in the tuple
+        this.value = result._0 === NoUpdate$ ? this.value : result._0._0; // unpack the Update value in the tuple
         this.state = result._1;
         changed = result._0.ctor === "Update";
         send(this, timestep, changed);
@@ -115,18 +117,31 @@ Elm.Native.Signal.make = function(elm) {
   }
 
   function timestamp(a) {
-    function update() { return Utils.Tuple2(Date.now(), a.value); }
-    return new LiftN(update, [a]);
+    function init(v) { return Utils.Tuple2(Date.now(), v); }
+    function step(v) {
+      switch(v.ctor) {
+        case "Update":
+          return { ctor: "Update", _0: init(v._0) };
+        case "NoUpdate":
+          return v;
+      }
+    }
+    return primitiveNode1(init, step, a);
   }
 
   function delay(t,s) {
       var delayed = new Input(s.value);
-      var firstEvent = true;
       function update(v) {
-        if (firstEvent) { firstEvent = false; return; }
         setTimeout(function() { elm.notify(delayed.id, v); }, t);
       }
-      lift(update,s);
+      s.kids.push({
+        id : Utils.guid(),
+        recv : function(timestep, changed, parentID) {
+          if(changed) {
+            update(s.value);
+          }
+        }
+      });
       return delayed;
   }
 
@@ -135,6 +150,7 @@ Elm.Native.Signal.make = function(elm) {
     primitiveNode1 : F3(primitiveNode1),
     primitiveNode2 : F4(primitiveNode2),
     primitiveState : F3(primitiveState),
+    NoUpdate$ : NoUpdate$,
     delay : F2(delay),
     timestamp : timestamp
   };

@@ -35,6 +35,7 @@ import Basics (fst, not, (<|), (+), (.), id, (==))
 
 data Signal a = Signal
 
+-- Event of an input Signal of a node
 data Event a = Update a | NoUpdate a
 
 value e = case e of
@@ -52,35 +53,35 @@ primitives : {
   filter : (Bool -> a -> b) -> Signal Bool -> Signal a -> Signal b,
   merge : (a -> a -> a) -> (a -> a -> a) -> Signal a -> Signal a -> Signal a }
 primitives = {
-  stateful init step = Native.Signal.primitiveState (dupl . init) (\e s old ->
+  stateful init step = Native.Signal.primitiveState (dupl . init) (\e s ->
                          case e of
                            Update   v -> let v' = step v s in (Update v', v')
-                           _          -> (NoUpdate s, s)),
+                           _          -> (Native.Signal.NoUpdate', s)),
   
-  filter init = Native.Signal.primitiveNode2 init (\el es old ->
-                  if value el then es else NoUpdate old),
+  filter init = Native.Signal.primitiveNode2 init (\el es ->
+                  if value el then es else Native.Signal.NoUpdate'),
   
-  merge init resolve = Native.Signal.primitiveNode2 init (\el er old ->
+  merge init resolve = Native.Signal.primitiveNode2 init (\el er ->
                          case (el,er) of
                            (Update l, Update r) -> Update <| resolve l r
                            (Update l, _)        -> el
                            (_       , Update r) -> er
-                           _                    -> NoUpdate old) }
+                           _                    -> Native.Signal.NoUpdate') }
 
 {-| Transform a signal with a given function. -}
 lift  : (a -> b) -> Signal a -> Signal b
-lift f = Native.Signal.primitiveNode1 f <| \e old ->
+lift f = Native.Signal.primitiveNode1 f <| \e ->
            case e of
              Update   v -> Update <| f v
-             _          -> NoUpdate old
+             _          -> Native.Signal.NoUpdate'
 
 {-| Combine two signals with a given function. -}
 lift2 : (a -> b -> c) -> Signal a -> Signal b -> Signal c
-lift2 f = Native.Signal.primitiveNode2 f <| \ea eb old ->
+lift2 f = Native.Signal.primitiveNode2 f <| \ea eb ->
             case (ea, eb) of
               (Update a, _) -> Update <| f a (value eb)
               (_, Update b) -> Update <| f (value ea) b
-              _             -> NoUpdate old
+              _             -> Native.Signal.NoUpdate'
 
 lift3 : (a -> b -> c -> d) -> Signal a -> Signal b -> Signal c -> Signal d
 lift3 f i1 i2 i3                = f <~ i1 ~ i2 ~ i3
@@ -173,17 +174,17 @@ Imagine a signal `numbers` has initial value
 is a signal that has initial value 0 and updates as follows: ignore 0,
 ignore 0, update to 1, ignore 1, update to 2. -}
 dropRepeats : Signal a -> Signal a
-dropRepeats = Native.Signal.primitiveState dupl <| \e s old -> let v = value e in
-                if v == s then (NoUpdate old, s) else (Update v, v)
+dropRepeats = Native.Signal.primitiveState dupl <| \e s -> let v = value e in
+                if v == s then (Native.Signal.NoUpdate', s) else (Update v, v)
 
 {-| Sample from the second input every time an event occurs on the first input.
 For example, `(sampleOn clicks (every second))` will give the approximate time
 of the latest click. -}
 sampleOn : Signal a -> Signal b -> Signal b
-sampleOn = Native.Signal.primitiveNode2 (\_ s -> s) <| \t s old ->
+sampleOn = Native.Signal.primitiveNode2 (\_ s -> s) <| \t s ->
              case t of
-               Update   _ -> Update (value s)
-               NoUpdate _ -> NoUpdate old
+               Update   _ -> Update <| value s
+               NoUpdate _ -> Native.Signal.NoUpdate'
 
 {-| An alias for `lift`. A prettier way to apply a function to the current value
 of a signal. -}
