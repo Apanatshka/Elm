@@ -99,3 +99,6 @@ function A9(fun,a,b,c,d,e,f,g,h,i) {
   return fun.arity === 9 ? fun.func(a,b,c,d,e,f,g,h,i)
                          : fun(a)(b)(c)(d)(e)(f)(g)(h)(i);
 }
+function AN(fun,args) {
+  return fun.arity === undefined ? fun.apply(undefined, args) : fun.func.apply(undefined, args);
+}

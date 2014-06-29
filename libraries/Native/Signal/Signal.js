@@ -30,39 +30,45 @@ Elm.Native.Signal.make = function(elm) {
     elm.inputs.push(this);
   }
   
-  function PrimitiveNode(input1, input2, init, step) {
+  function PrimitiveNode(inputs, init, step) {
     this.id = Utils.guid();
-    this.value = A2(step, input1.value, input2.value);
+    this.value = AN(init, inputs.map(function(input,i,a){return input.value;}));
     this.kids = [];
     
-    var msg1 = null;
-    var msg2 = null;
-    var result = null;
+    var n = inputs.length;
+    var count = 0;
+    var msgs = new Array(n);
+    var result;
     
     this.recv = function(timestep, changed, parentID) {
-      if(parentID === input1.id) {
-        msg1 = { ctor: changed ? "Update" : "NoUpdate", _0: input1.value };
-      } else {
-        msg2 = { ctor: changed ? "Update" : "NoUpdate", _0: input2.value };
+      for (var i = inputs.length; i--; ) {
+        if(inputs[i].id === parentID) {
+          msgs[i] = { ctor: changed ? "Update" : "NoUpdate", _0: inputs[i].value };
+          count++;
+          break;
+        }
       }
-      if(msg1 !== null && msg2 !== null) {
-        result = A3(step, msg1, msg2, this.value);
+      if(count === n) {
+        result = AN(step, msgs.concat(this.value));
         
         this.value = result._0;
         changed = result.ctor === "Update";
         send(this, timestep, changed);
         
-        msg1 = null;
-        msg2 = null;
+        msgs = new Array(n);
+        count = 0;
       }
     }
     
-    input1.kids.push(this);
-    input2.kids.push(this);
+    for (var i = n; i--; ) { inputs[i].kids.push(this); }
   }
   
-  function primitiveNode(i1, i2, init, step) {
-    return new PrimitiveNode(i1, i2, init, step);
+  function primitiveNode1(i1, init, step) {
+    return new PrimitiveNode([i1], init, step);
+  }
+  
+  function primitiveNode2(i1, i2, init, step) {
+    return new PrimitiveNode([i1, i2], init, step);
   }
 
   function timestamp(a) {
@@ -83,7 +89,8 @@ Elm.Native.Signal.make = function(elm) {
 
   return elm.Native.Signal.values = {
     constant : function(v) { return new Input(v); },
-    primitiveNode : F4(primitiveNode),
+    primitiveNode1 : F3(primitiveNode1),
+    primitiveNode2 : F4(primitiveNode2),
     delay : F2(delay),
     timestamp : timestamp
   };

@@ -31,7 +31,7 @@ the `Time` library.
 
 import Native.Signal
 import List (foldr, foldr1, (::))
-import Basics (not, (<|), always, (+), (.), id, (==))
+import Basics (not, (<|), (+), (.), id, (==))
 
 data Signal a = Signal
 
@@ -47,11 +47,14 @@ constant = Native.Signal.constant
 
 {-| Transform a signal with a given function. -}
 lift  : (a -> b) -> Signal a -> Signal b
-lift f sa = lift2 (always f) (constant ()) sa
+lift f sa = Native.Signal.primitiveNode1 sa f <| \ea old ->
+              case ea of
+                Update   a -> Update <| f a
+                NoUpdate _ -> NoUpdate old
 
 {-| Combine two signals with a given function. -}
 lift2 : (a -> b -> c) -> Signal a -> Signal b -> Signal c
-lift2 f sa sb = Native.Signal.primitiveNode sa sb f <| \ea eb old ->
+lift2 f sa sb = Native.Signal.primitiveNode2 sa sb f <| \ea eb old ->
                   case (ea, eb) of
                     (Update a, _) -> Update <| f a (value eb)
                     (_, Update b) -> Update <| f (value ea) b
@@ -86,7 +89,7 @@ For instance, `foldp (+) 0 (fps 40)` is the time the program has been running,
 updated 40 times a second. -}
 foldp : (a -> b -> b) -> b -> Signal a -> Signal b
 foldp step base input = 
-  Native.Signal.primitiveNode (constant ()) input (\_ _ -> base) <| \_ e state ->
+  Native.Signal.primitiveNode1 input (\_ -> base) <| \e state ->
     case e of
       Update   v -> Update (step v state)
       NoUpdate _ -> NoUpdate state
@@ -94,7 +97,7 @@ foldp step base input =
 {-| Merge two signals into one, biased towards the first signal if both signals
 update at the same time. -}
 merge : Signal a -> Signal a -> Signal a
-merge sl sr = Native.Signal.primitiveNode sl sr (\l _ -> l) <| \el er old ->
+merge sl sr = Native.Signal.primitiveNode2 sl sr (\l _ -> l) <| \el er old ->
                 case (el, er) of
                   (Update l, _) -> el
                   (_, Update r) -> er
@@ -141,7 +144,7 @@ initially.
 -}
 keepWhen : Signal Bool -> a -> Signal a -> Signal a
 keepWhen latch b signal = 
-  Native.Signal.primitiveNode latch signal (\l s -> if l then s else b) <| \el es old ->
+  Native.Signal.primitiveNode2 latch signal (\l s -> if l then s else b) <| \el es old ->
     if value el then es else NoUpdate old
 
 {-| Drop events when the first signal is true. Elm does not allow undefined
@@ -159,7 +162,7 @@ is a signal that has initial value 0 and updates as follows: ignore 0,
 ignore 0, update to 1, ignore 1, update to 2. -}
 dropRepeats : Signal a -> Signal a
 dropRepeats s = 
-  Native.Signal.primitiveNode (constant ()) s (always id) <| \es _ old ->
+  Native.Signal.primitiveNode1 s id <| \es old ->
     case es of
       Update   v -> if v == old then NoUpdate old else es
       NoUpdate _ -> NoUpdate old
@@ -169,7 +172,7 @@ For example, `(sampleOn clicks (every second))` will give the approximate time
 of the latest click. -}
 sampleOn : Signal a -> Signal b -> Signal b
 sampleOn trigger signal = 
-  Native.Signal.primitiveNode trigger signal (always id) <| \t s old ->
+  Native.Signal.primitiveNode2 trigger signal (\_ s -> s) <| \t s old ->
     case t of
       Update   _ -> Update (value s)
       NoUpdate _ -> NoUpdate old
