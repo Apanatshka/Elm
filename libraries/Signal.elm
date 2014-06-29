@@ -31,7 +31,7 @@ the `Time` library.
 
 import Native.Signal
 import List (foldr, foldr1, (::))
-import Basics (not, (<|), (+), (.), id, (==))
+import Basics (fst, not, (<|), (+), (.), id, (==))
 
 data Signal a = Signal
 
@@ -41,24 +41,46 @@ value e = case e of
             Update   v -> v
             NoUpdate v -> v
 
+dupl a = (a,a)
+
 {-| Create a constant signal that never changes. -}
 constant : a -> Signal a
 constant = Native.Signal.constant
 
+primitives : {
+  stateful : (a -> s) -> (a -> s -> s) -> Signal a -> Signal s,
+  filter : (Bool -> a -> b) -> Signal Bool -> Signal a -> Signal b,
+  merge : (a -> a -> a) -> (a -> a -> a) -> Signal a -> Signal a -> Signal a }
+primitives = {
+  stateful init step = Native.Signal.primitiveState (dupl . init) (\e s old ->
+                         case e of
+                           Update   v -> let v' = step v s in (Update v', v')
+                           _          -> (NoUpdate s, s)),
+  
+  filter init = Native.Signal.primitiveNode2 init (\el es old ->
+                  if value el then es else NoUpdate old),
+  
+  merge init resolve = Native.Signal.primitiveNode2 init (\el er old ->
+                         case (el,er) of
+                           (Update l, Update r) -> Update <| resolve l r
+                           (Update l, _)        -> el
+                           (_       , Update r) -> er
+                           _                    -> NoUpdate old) }
+
 {-| Transform a signal with a given function. -}
 lift  : (a -> b) -> Signal a -> Signal b
-lift f sa = Native.Signal.primitiveNode1 sa f <| \ea old ->
-              case ea of
-                Update   a -> Update <| f a
-                NoUpdate _ -> NoUpdate old
+lift f = Native.Signal.primitiveNode1 f <| \e old ->
+           case e of
+             Update   v -> Update <| f v
+             _          -> NoUpdate old
 
 {-| Combine two signals with a given function. -}
 lift2 : (a -> b -> c) -> Signal a -> Signal b -> Signal c
-lift2 f sa sb = Native.Signal.primitiveNode2 sa sb f <| \ea eb old ->
-                  case (ea, eb) of
-                    (Update a, _) -> Update <| f a (value eb)
-                    (_, Update b) -> Update <| f (value ea) b
-                    _             -> NoUpdate old
+lift2 f = Native.Signal.primitiveNode2 f <| \ea eb old ->
+            case (ea, eb) of
+              (Update a, _) -> Update <| f a (value eb)
+              (_, Update b) -> Update <| f (value ea) b
+              _             -> NoUpdate old
 
 lift3 : (a -> b -> c -> d) -> Signal a -> Signal b -> Signal c -> Signal d
 lift3 f i1 i2 i3                = f <~ i1 ~ i2 ~ i3
@@ -88,20 +110,12 @@ be accumulated, producing a new output value.
 For instance, `foldp (+) 0 (fps 40)` is the time the program has been running,
 updated 40 times a second. -}
 foldp : (a -> b -> b) -> b -> Signal a -> Signal b
-foldp step base input = 
-  Native.Signal.primitiveNode1 input (\_ -> base) <| \e state ->
-    case e of
-      Update   v -> Update (step v state)
-      NoUpdate _ -> NoUpdate state
+foldp step base = primitives.stateful (\_ -> base) step
 
 {-| Merge two signals into one, biased towards the first signal if both signals
 update at the same time. -}
 merge : Signal a -> Signal a -> Signal a
-merge sl sr = Native.Signal.primitiveNode2 sl sr (\l _ -> l) <| \el er old ->
-                case (el, er) of
-                  (Update l, _) -> el
-                  (_, Update r) -> er
-                  _             -> NoUpdate old
+merge = primitives.merge (\l _ -> l) (\l _ -> l)
 
 {-| Merge many signals into one, biased towards the left-most signal if multiple
 signals update simultaneously. -}
@@ -143,9 +157,7 @@ signals, so a base case must be provided in case the first signal is not true
 initially.
 -}
 keepWhen : Signal Bool -> a -> Signal a -> Signal a
-keepWhen latch b signal = 
-  Native.Signal.primitiveNode2 latch signal (\l s -> if l then s else b) <| \el es old ->
-    if value el then es else NoUpdate old
+keepWhen latch b = primitives.filter (\l s -> if l then s else b) latch
 
 {-| Drop events when the first signal is true. Elm does not allow undefined
 signals, so a base case must be provided in case the first signal is true
@@ -161,21 +173,17 @@ Imagine a signal `numbers` has initial value
 is a signal that has initial value 0 and updates as follows: ignore 0,
 ignore 0, update to 1, ignore 1, update to 2. -}
 dropRepeats : Signal a -> Signal a
-dropRepeats s = 
-  Native.Signal.primitiveNode1 s id <| \es old ->
-    case es of
-      Update   v -> if v == old then NoUpdate old else es
-      NoUpdate _ -> NoUpdate old
+dropRepeats = Native.Signal.primitiveState dupl <| \e s old -> let v = value e in
+                if v == s then (NoUpdate old, s) else (Update v, v)
 
 {-| Sample from the second input every time an event occurs on the first input.
 For example, `(sampleOn clicks (every second))` will give the approximate time
 of the latest click. -}
 sampleOn : Signal a -> Signal b -> Signal b
-sampleOn trigger signal = 
-  Native.Signal.primitiveNode2 trigger signal (\_ s -> s) <| \t s old ->
-    case t of
-      Update   _ -> Update (value s)
-      NoUpdate _ -> NoUpdate old
+sampleOn = Native.Signal.primitiveNode2 (\_ s -> s) <| \t s old ->
+             case t of
+               Update   _ -> Update (value s)
+               NoUpdate _ -> NoUpdate old
 
 {-| An alias for `lift`. A prettier way to apply a function to the current value
 of a signal. -}
